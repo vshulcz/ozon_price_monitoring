@@ -101,11 +101,15 @@ async def got_url(
         )
         await state.clear()
         return
-    
-    waiting_text = i18n.t(user.language, "add.fetching")
-    temp_msg = await message.answer(waiting_text, reply_markup=cancel_kb(i18n, user.language))
 
-    await state.update_data(temp_message_chat_id=temp_msg.chat.id, temp_message_id=temp_msg.message_id)
+    waiting_text = i18n.t(user.language, "add.fetching")
+    temp_msg = await message.answer(
+        waiting_text, reply_markup=cancel_kb(i18n, user.language)
+    )
+
+    await state.update_data(
+        temp_message_chat_id=temp_msg.chat.id, temp_message_id=temp_msg.message_id
+    )
 
     try:
         info = await fetch_product_info(url)
@@ -113,7 +117,9 @@ async def got_url(
         err_text = i18n.t(user.language, "add.fetch_blocked")
         try:
             if (await state.get_state()) == AddProduct.waiting_for_url.state:
-                await temp_msg.edit_text(err_text, reply_markup=cancel_kb(i18n, user.language))
+                await temp_msg.edit_text(
+                    err_text, reply_markup=cancel_kb(i18n, user.language)
+                )
         except Exception:
             await message.answer(err_text, reply_markup=cancel_kb(i18n, user.language))
         return
@@ -121,11 +127,13 @@ async def got_url(
         err_text = i18n.t(user.language, "add.fetch_error")
         try:
             if (await state.get_state()) == AddProduct.waiting_for_url.state:
-                await temp_msg.edit_text(err_text, reply_markup=cancel_kb(i18n, user.language))
+                await temp_msg.edit_text(
+                    err_text, reply_markup=cancel_kb(i18n, user.language)
+                )
         except Exception:
             await message.answer(err_text, reply_markup=cancel_kb(i18n, user.language))
         return
-    
+
     if (await state.get_state()) != AddProduct.waiting_for_url.state:
         return
 
@@ -142,9 +150,13 @@ async def got_url(
         )
     ]
     if info.price_with_card is not None:
-        lines.append(f"\n{ i18n.t(user.language, 'add.with_card_label') }: <b>{info.price_with_card:.2f}</b>")
+        lines.append(
+            f"\n{ i18n.t(user.language, 'add.with_card_label') }: <b>{info.price_with_card:.2f}</b>"
+        )
     if info.price_no_card is not None:
-        lines.append(f"{ i18n.t(user.language, 'add.no_card_label') }: <b>{info.price_no_card:.2f}</b>")
+        lines.append(
+            f"{ i18n.t(user.language, 'add.no_card_label') }: <b>{info.price_no_card:.2f}</b>"
+        )
 
     ftext = "\n".join(lines)
     try:

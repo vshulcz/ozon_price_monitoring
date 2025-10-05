@@ -1,19 +1,20 @@
 from __future__ import annotations
 
+import json
 import platform
 import re
 import asyncio
 import contextlib
 from dataclasses import dataclass
 from decimal import Decimal
-from typing import Optional
-from urllib.parse import urlparse, urlsplit, urlunsplit
+from urllib.parse import quote, urlparse, urlsplit, urlunsplit
 
 from playwright.async_api import async_playwright, Page, Browser, BrowserContext
 
 
 FIRST_PARTY = ("ozon.ru", "ozone.ru", "cdn1.ozone.ru", "cdn2.ozone.ru", "ir.ozone.ru")
-_PRICE_RE = re.compile(r"(\d[\d\s\u00A0\u2009\u202F]*)\s*₽")
+_WIDGET_PRICE_KEYS = ("webPrice", "webProductPrices", "webSale")
+_WIDGET_TITLE_KEYS = ("webProductHeading",)
 
 
 class OzonBlockedError(RuntimeError):
@@ -23,11 +24,11 @@ class OzonBlockedError(RuntimeError):
 @dataclass
 class ProductInfo:
     title: str
-    price_no_card: Optional[Decimal]
-    price_with_card: Optional[Decimal]
+    price_no_card: Decimal | None
+    price_with_card: Decimal | None
 
     @property
-    def price_for_compare(self) -> Optional[Decimal]:
+    def price_for_compare(self) -> Decimal | None:
         return self.price_with_card or self.price_no_card
 
 
@@ -41,7 +42,7 @@ def _to_www(u: str) -> str:
     return urlunsplit((s.scheme or "https", host, s.path, s.query, s.fragment))
 
 
-def _normalize_price(text: str) -> Optional[Decimal]:
+def _normalize_price(text: str) -> Decimal | None:
     if not text:
         return None
 
@@ -143,12 +144,20 @@ async def _route_blocker(route, request):
     return await route.continue_()
 
 
-async def _pass_ozon_challenge(ctx: BrowserContext, page: Page, timeout_ms=45000) -> bool:
-    await page.goto("https://www.ozon.ru/?abt_att=1&__rr=1",
-                    wait_until="domcontentloaded", timeout=timeout_ms)
+async def _pass_ozon_challenge(
+    ctx: BrowserContext, page: Page, timeout_ms=45000
+) -> bool:
+    await page.goto(
+        "https://www.ozon.ru/?abt_att=1&__rr=1",
+        wait_until="domcontentloaded",
+        timeout=timeout_ms,
+    )
 
     try:
-        async with page.expect_response(lambda r: ("www.ozon.ru/abt/result" in r.url) and r.status == 200, timeout=timeout_ms) as resp_info:
+        async with page.expect_response(
+            lambda r: ("www.ozon.ru/abt/result" in r.url) and r.status == 200,
+            timeout=timeout_ms,
+        ) as resp_info:
             await resp_info.value
     except Exception:
         return False
@@ -158,71 +167,23 @@ async def _pass_ozon_challenge(ctx: BrowserContext, page: Page, timeout_ms=45000
     return ok
 
 
-async def _extract_product_info(page: Page) -> ProductInfo:
-    await page.wait_for_selector('[data-widget="webProductHeading"] h1', timeout=30000)
-    await page.wait_for_selector('[data-widget="webPrice"]', timeout=30000)
-
-    data = await page.evaluate(
-        """
-        (() => {
-          const h1 = document.querySelector('[data-widget="webProductHeading"] h1');
-          const title = h1 ? h1.textContent.trim() : '';
-          const priceBlock = document.querySelector('[data-widget="webPrice"]');
-          const text = priceBlock ? priceBlock.innerText : '';
-          return { title, text };
-        })()
-        """
-    )
-
-    title = (data.get("title") or "").strip() or "Ozon товар"
-    txt = data.get("text") or ""
-    prices = [m.group(1) for m in _PRICE_RE.finditer(txt)]
-
-    with_card = _normalize_price(prices[0]) if len(prices) >= 1 else None
-    no_card = _normalize_price(prices[1]) if len(prices) >= 2 else None
-
-    if ("без Ozon Карты" in txt or "without Ozon Card" in txt) and len(prices) >= 2:
-        no_card = _normalize_price(prices[1])
-    if ("Ozon Карт" in txt or "Ozon Card" in txt) and len(prices) >= 1:
-        with_card = _normalize_price(prices[0])
-
-    return ProductInfo(title=title, price_no_card=no_card, price_with_card=with_card)
-
-
-async def fetch_product_info(
-    url: str, *, retries: int = 2, navigation_timeout_ms: int = 60000
-) -> ProductInfo:
+async def fetch_product_info(url: str, *, retries: int = 2) -> ProductInfo:
     if not re.search(r"^https?://(www\.)?ozon\.[^/]+/", url, re.IGNORECASE):
         raise ValueError("Not an Ozon product URL")
-    
+
     url = _to_www(url)
 
-    last_exc: Optional[Exception] = None
     for _ in range(retries + 1):
         page = await _Browser.page()
-
         try:
-            if not await _pass_ozon_challenge(_Browser._ctx, page, timeout_ms=45000):
-                raise OzonBlockedError("ozon_antibot_hard_block")
-
-            await page.goto(url, wait_until="domcontentloaded", timeout=navigation_timeout_ms)
-            await page.wait_for_url(r"**/product/**", timeout=15000)
-
-            info = await _extract_product_info(page)
-            return info
-
-        except Exception as e:
-            last_exc = e
+            return await fetch_product_info_via_api(url)
+        except Exception:
             await asyncio.sleep(1.2)
         finally:
             with contextlib.suppress(Exception):
                 await page.close()
 
-    assert last_exc is not None
-    if isinstance(last_exc, OzonBlockedError):
-        raise last_exc
-
-    raise OzonBlockedError(str(last_exc))
+    raise OzonBlockedError()
 
 
 async def shutdown_browser() -> None:
@@ -234,7 +195,7 @@ def _os_profile():
     if sysname == "Linux":
         return {
             "ua": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 "
-                  "(KHTML, like Gecko) Chrome/128.0.0.0 Safari/537.36",
+            "(KHTML, like Gecko) Chrome/128.0.0.0 Safari/537.36",
             "platform_js": "Linux x86_64",
             "args": [
                 "--no-sandbox",
@@ -249,16 +210,149 @@ def _os_profile():
     elif sysname == "Darwin":
         return {
             "ua": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 "
-                  "(KHTML, like Gecko) Chrome/128.0.0.0 Safari/537.36",
+            "(KHTML, like Gecko) Chrome/128.0.0.0 Safari/537.36",
             "platform_js": "MacIntel",
             "args": ["--lang=ru-RU"],
-            "channel": "chrome", 
+            "channel": "chrome",
         }
     else:  # Windows
         return {
             "ua": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
-                  "(KHTML, like Gecko) Chrome/128.0.0.0 Safari/537.36",
+            "(KHTML, like Gecko) Chrome/128.0.0.0 Safari/537.36",
             "platform_js": "Win32",
             "args": ["--lang=ru-RU"],
-            "channel": "chrome", 
+            "channel": "chrome",
         }
+
+
+def _iter_widget_objs(widget_states: dict[str, str]):
+    for k, v in (widget_states or {}).items():
+        if not isinstance(v, str):
+            continue
+        with contextlib.suppress(Exception):
+            yield k, json.loads(v)
+
+
+def _is_price_widget(key: str) -> bool:
+    low = key.lower()
+    return any(name.lower() in low for name in _WIDGET_PRICE_KEYS)
+
+
+def _is_title_widget(key: str) -> bool:
+    low = key.lower()
+    return any(name.lower() in low for name in _WIDGET_TITLE_KEYS)
+
+
+def _pick_title(data: dict) -> str | None:
+    for k, obj in _iter_widget_objs(data.get("widgetStates") or {}):
+        if _is_title_widget(k):
+            t = obj.get("title")
+            if isinstance(t, str) and t.strip():
+                return t.strip()
+    with contextlib.suppress(Exception):
+        t = (data.get("seo") or {}).get("title")
+        if t and isinstance(t, str) and t.strip():
+            return t.strip()
+    for _, obj in _iter_widget_objs(data.get("widgetStates") or {}):
+        with contextlib.suppress(Exception):
+            t = (obj.get("cellTrackingInfo") or {}).get("product", {}).get("title") or (
+                obj.get("product") or {}
+            ).get("title")
+            if t and isinstance(t, str) and t.strip():
+                return t.strip()
+    return None
+
+
+def _pick_prices(data: dict) -> tuple[Decimal | None, Decimal | None]:
+    with_card = None
+    no_card = None
+
+    for k, obj in _iter_widget_objs(data.get("widgetStates") or {}):
+        if not _is_price_widget(k):
+            continue
+
+        is_avail = obj.get("isAvailable", True)
+
+        cand_card = obj.get("cardPrice")
+        cand_no = obj.get("price")
+        if cand_card is None and cand_no is None:
+            product = (obj.get("cellTrackingInfo") or {}).get("product", {}) or obj.get(
+                "product", {}
+            )
+            cand_card = (
+                cand_card or product.get("cardPrice") or product.get("finalPrice")
+            )
+            cand_no = cand_no or product.get("price") or product.get("originalPrice")
+
+        wc = (
+            _normalize_price(str(cand_card))
+            if isinstance(cand_card, str)
+            else (_normalize_price(str(cand_card)) if cand_card is not None else None)
+        )
+        nc = (
+            _normalize_price(str(cand_no))
+            if isinstance(cand_no, str)
+            else (_normalize_price(str(cand_no)) if cand_no is not None else None)
+        )
+
+        if wc and (not with_card or is_avail):
+            with_card = wc
+        if nc and (not no_card or is_avail):
+            no_card = nc
+
+        if with_card and no_card:
+            break
+
+    if not (with_card and no_card):
+        dump = json.dumps(data, ensure_ascii=False)
+        prices = [
+            _normalize_price(m)
+            for m in re.findall(r"(\d[\d\s\u00A0\u2009\u202F]*)\s*₽", dump)
+        ]
+        prices = [p for p in prices if p]
+        if prices:
+            if not with_card and len(prices) >= 1:
+                with_card = prices[0]
+            if not no_card and len(prices) >= 2:
+                no_card = prices[1]
+
+    return with_card, no_card
+
+
+async def _ozon_api_get_json_v2(ctx, url: str) -> dict | None:
+    s = urlsplit(url)
+    path_q = s.path + (("?" + s.query) if s.query else "")
+    q = quote(path_q, safe="/:?=&%")
+    api_url = f"https://api.ozon.ru/composer-api.bx/page/json/v2?url={q}"
+    headers = {
+        "Accept": "application/json",
+        "Referer": "https://www.ozon.ru/",
+    }
+    r = await ctx.request.get(api_url, headers=headers)
+    if not r.ok:
+        return None
+    with contextlib.suppress(Exception):
+        return await r.json()
+    return None
+
+
+async def fetch_product_info_via_api(url: str) -> ProductInfo:
+    await _Browser.ensure_started()
+    ctx = _Browser._ctx
+    assert ctx is not None
+
+    with contextlib.suppress(Exception):
+        page = await ctx.new_page()
+        try:
+            await _pass_ozon_challenge(ctx, page, timeout_ms=20000)
+        finally:
+            await page.close()
+
+    data = await _ozon_api_get_json_v2(ctx, _to_www(url))
+    if not data:
+        raise OzonBlockedError("ozon_api_empty")
+
+    title = _pick_title(data) or "Ozon item"
+    with_card, no_card = _pick_prices(data)
+
+    return ProductInfo(title=title, price_with_card=with_card, price_no_card=no_card)
