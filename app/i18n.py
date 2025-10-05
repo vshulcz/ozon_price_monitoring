@@ -55,6 +55,11 @@ i18n = I18N(
 Текущая цена: <b>{current}</b>
 Целевая цена: <b>{target}</b>""",
             "add.cancel": "Добавление отменено. Возвращаю в меню.",
+            "add.fetching": "Подождите, ищу информацию о товаре на Ozon…",
+            "add.fetch_error": "Не удалось получить данные с Ozon. Попробуйте позже.",
+            "add.fetch_blocked": "Ozon блокирует доступ (antibot). Попробуйте позже.",
+            "add.with_card_label": "С картой",
+            "add.no_card_label": "Без карты",
             # List and product card
             "list.title": "Ваши товары (стр. {page}/{pages})",
             "list.empty": 'У вас пока нет товаров. Нажмите "Добавить товар" в главном меню.',
@@ -121,6 +126,11 @@ Link: {url}
 Current price: <b>{current}</b>
 Target price: <b>{target}</b>""",
             "add.cancel": "Adding cancelled. Back to menu.",
+            "add.fetching": "Fetching product info from Ozon… please wait.",
+            "add.fetch_error": "Failed to fetch data from Ozon. Please try again later.",
+            "add.fetch_blocked": "Ozon blocked the request (antibot). Please try again later.",
+            "add.with_card_label": "With card",
+            "add.no_card_label": "Without card",
             # List and product card
             "list.title": "Your products (p. {page}/{pages})",
             "list.empty": 'You have no products yet. Tap "Add product" in main menu.',

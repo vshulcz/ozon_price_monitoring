@@ -101,14 +101,32 @@ async def got_url(
         )
         await state.clear()
         return
+    
+    waiting_text = i18n.t(user.language, "add.fetching")
+    temp_msg = await message.answer(waiting_text, reply_markup=cancel_kb(i18n, user.language))
+
+    await state.update_data(temp_message_chat_id=temp_msg.chat.id, temp_message_id=temp_msg.message_id)
 
     try:
         info = await fetch_product_info(url)
     except RuntimeError:
-        await message.answer(
-            "Не удалось подключиться к Ozon. Попробуйте позже.",
-            reply_markup=cancel_kb(i18n, user.language),
-        )
+        err_text = i18n.t(user.language, "add.fetch_blocked")
+        try:
+            if (await state.get_state()) == AddProduct.waiting_for_url.state:
+                await temp_msg.edit_text(err_text, reply_markup=cancel_kb(i18n, user.language))
+        except Exception:
+            await message.answer(err_text, reply_markup=cancel_kb(i18n, user.language))
+        return
+    except Exception:
+        err_text = i18n.t(user.language, "add.fetch_error")
+        try:
+            if (await state.get_state()) == AddProduct.waiting_for_url.state:
+                await temp_msg.edit_text(err_text, reply_markup=cancel_kb(i18n, user.language))
+        except Exception:
+            await message.answer(err_text, reply_markup=cancel_kb(i18n, user.language))
+        return
+    
+    if (await state.get_state()) != AddProduct.waiting_for_url.state:
         return
 
     chosen = info.price_with_card or info.price_no_card
@@ -124,11 +142,15 @@ async def got_url(
         )
     ]
     if info.price_with_card is not None:
-        lines.append(f"\nС картой: <b>{info.price_with_card:.2f}</b>")
+        lines.append(f"\n{ i18n.t(user.language, 'add.with_card_label') }: <b>{info.price_with_card:.2f}</b>")
     if info.price_no_card is not None:
-        lines.append(f"Без карты: <b>{info.price_no_card:.2f}</b>")
+        lines.append(f"{ i18n.t(user.language, 'add.no_card_label') }: <b>{info.price_no_card:.2f}</b>")
 
-    await message.answer("\n".join(lines))
+    ftext = "\n".join(lines)
+    try:
+        await temp_msg.edit_text(ftext)
+    except Exception:
+        await message.answer(ftext)
 
     await state.set_state(AddProduct.waiting_for_target_price)
     await message.answer(
