@@ -1,0 +1,11 @@
+services:
+  bot:
+    build: .
+    container_name: ozon-price-bot
+    restart: unless-stopped
+    environment:
+      - BOT_TOKEN=${BOT_TOKEN}
+      - DATABASE_PATH=/app/data/ozonbot.db
+      - LOG_LEVEL=INFO
+    volumes:
+      - ./data:/app/data
